@@ -148,13 +148,13 @@
       h: 280,
       launcher: makeLauncher(1, 76, 80, 18),
       movingSquares: [
-        ...buildDynamicSquares({ y: 120, count: 14, startX: 180, spacing: 62, speed: 82, size: 16, spin: 1.8 }),
-        ...buildDynamicSquares({ y: 185, count: 12, startX: 140, spacing: 72, speed: 105, size: 14, spin: 2.2 }),
+        ...buildDynamicSquares({ y: 120, count: 24, startX: 50, spacing: 40, speed: 90, size: 15, spin: 4.2 }),
+        ...buildDynamicSquares({ y: 185, count: 24, startX: 40, spacing: 40, speed: 118, size: 14, spin: 4.8 }),
       ],
       targetsA: [
-        { label: "BUFF", x: 330, y: 245, r: 26, type: "BUFF", glow: 0 },
-        { label: "SPLIT", x: 540, y: 245, r: 26, type: "SPLIT", glow: 0 },
-        { label: "WEAPON", x: 750, y: 245, r: 26, type: "WEAPON", glow: 0 },
+        { label: "BUFF", type: "BUFF", glow: 0, idx: 0 },
+        { label: "SPLIT", type: "SPLIT", glow: 0, idx: 1 },
+        { label: "WEAPON", type: "WEAPON", glow: 0, idx: 2 },
       ],
     };
 
@@ -166,8 +166,8 @@
       h: 275,
       launcher: makeLauncher(2, 76, 392, -8),
       movingSquares: [
-        ...buildDynamicSquares({ y: 438, count: 14, startX: 120, spacing: 65, speed: 96, size: 16, spin: 1.7 }),
-        ...buildDynamicSquares({ y: 505, count: 12, startX: 170, spacing: 70, speed: 118, size: 15, spin: 2.1 }),
+        ...buildDynamicSquares({ y: 438, count: 24, startX: 35, spacing: 40, speed: 105, size: 15, spin: 4.2 }),
+        ...buildDynamicSquares({ y: 505, count: 24, startX: 55, spacing: 40, speed: 126, size: 14, spin: 4.9 }),
       ],
       targetsB: [
         { label: "UNIT-1", idx: 0, glow: 0 },
@@ -203,14 +203,14 @@
       target.glow = 0.8;
       if (target.type === "BUFF") {
         state.buff += 1;
-        addSpark(target.x, target.y, "#ffd76a", 16);
+        addSpark(marble.x, marble.y, "#ffd76a", 16);
       } else if (target.type === "SPLIT") {
         fire(container1.launcher, -0.22);
         fire(container1.launcher, 0.22);
-        addSpark(target.x, target.y, "#79ffba", 20);
+        addSpark(marble.x, marble.y, "#79ffba", 20);
       } else if (target.type === "WEAPON") {
         fire(container2.launcher, rand(-0.08, 0.08));
-        addSpark(target.x, target.y, "#67f5ff", 24);
+        addSpark(marble.x, marble.y, "#67f5ff", 24);
       }
       marble.dead = true;
     }
@@ -256,15 +256,21 @@
           marble.x = o.x + n.x * minD;
           marble.y = o.y + n.y * minD;
           const bounced = reflect(v(marble.vx, marble.vy), n, 1.0);
-          marble.vx = bounced.x * 0.94;
-          marble.vy = bounced.y * 0.94;
+          const speedBoost = rand(0.88, 1.22);
+          marble.vx = bounced.x * speedBoost + rand(-35, 35);
+          marble.vy = bounced.y * speedBoost + rand(-30, 30);
         }
       }
 
       // targets
       if (c.id === 1) {
-        for (const t of c.targetsA) {
-          if (Math.hypot(marble.x - t.x, marble.y - t.y) < marble.r + t.r) {
+        const zoneW = c.w / c.targetsA.length;
+        const zoneH = 58;
+        const zoneY = c.y + c.h - zoneH;
+        for (const [i, t] of c.targetsA.entries()) {
+          const zoneX = c.x + i * zoneW;
+          const inZone = marble.x > zoneX && marble.x < zoneX + zoneW && marble.y > zoneY;
+          if (inZone) {
             handleTargetA(marble, t);
             return;
           }
@@ -298,7 +304,7 @@
         for (const o of c.movingSquares) {
           o.x += o.speed * dt;
           o.angle += o.spin * dt;
-          if (o.x > c.x + c.w + 30) o.x = c.x - 30;
+          if (o.x > c.x + c.w + o.size) o.x -= c.w + o.size * 2;
         }
       }
 
@@ -386,19 +392,22 @@
 
     function drawTargets() {
       for (const t of container1.targetsA) {
+        const i = t.idx;
+        const zoneW = container1.w / container1.targetsA.length;
+        const zoneH = 58;
+        const x = container1.x + i * zoneW;
+        const y = container1.y + container1.h - zoneH;
         const alpha = 0.2 + t.glow * 0.8;
         ctx.fillStyle = `rgba(66,255,140,${alpha})`;
-        ctx.beginPath();
-        ctx.arc(t.x, t.y, t.r, 0, TAU);
-        ctx.fill();
+        ctx.fillRect(x, y, zoneW, zoneH);
         ctx.strokeStyle = "#7bffb1";
         ctx.lineWidth = 2;
-        ctx.stroke();
+        ctx.strokeRect(x, y, zoneW, zoneH);
 
         ctx.fillStyle = "#c7ffd6";
         ctx.font = "bold 17px Segoe UI";
         const w = ctx.measureText(t.label).width;
-        ctx.fillText(t.label, t.x - w / 2, t.y + 5);
+        ctx.fillText(t.label, x + zoneW / 2 - w / 2, y + 34);
       }
 
       for (const t of container2.targetsB) {
