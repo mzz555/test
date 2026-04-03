@@ -1,0 +1,507 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>弹珠单位生产系统可视化</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #08110c;
+      --panel: #0f1c14;
+      --line: #23de69;
+      --muted: #8afab0;
+      --accent: #3cff84;
+      --warning: #ffe66d;
+    }
+
+    body {
+      margin: 0;
+      background: radial-gradient(circle at 20% 10%, #133122 0%, #050805 60%, #030603 100%);
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--muted);
+      display: grid;
+      place-items: center;
+      min-height: 100vh;
+    }
+
+    .wrap {
+      width: min(1100px, 95vw);
+      padding: 12px;
+      border: 1px solid #1f4a31;
+      border-radius: 12px;
+      background: linear-gradient(160deg, rgba(15, 28, 20, 0.95), rgba(7, 14, 10, 0.95));
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45), inset 0 0 32px rgba(53, 199, 105, 0.08);
+    }
+
+    canvas {
+      width: 100%;
+      height: auto;
+      border-radius: 10px;
+      border: 1px solid #2a6140;
+      background: #020503;
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <canvas id="sim" width="1040" height="650"></canvas>
+  </div>
+
+  <script>
+    const canvas = document.getElementById("sim");
+    const ctx = canvas.getContext("2d");
+
+    const TAU = Math.PI * 2;
+    const state = {
+      buff: 0,
+      units: [0, 0, 0, 0],
+      marbles: [],
+      sparks: [],
+      elapsed: 0,
+    };
+
+    const gravity = 680;
+    const damping = 0.83;
+    const marbleRadius = 8;
+
+    function rand(min, max) {
+      return Math.random() * (max - min) + min;
+    }
+
+    function v(x, y) {
+      return { x, y };
+    }
+
+    function normalize(p) {
+      const n = Math.hypot(p.x, p.y) || 1;
+      return { x: p.x / n, y: p.y / n };
+    }
+
+    function dot(a, b) {
+      return a.x * b.x + a.y * b.y;
+    }
+
+    function reflect(vel, normal, bounce = 1.0) {
+      const d = dot(vel, normal);
+      return {
+        x: vel.x - 2 * d * normal.x * bounce,
+        y: vel.y - 2 * d * normal.y * bounce,
+      };
+    }
+
+    function distPointToSegment(p, a, b) {
+      const ab = v(b.x - a.x, b.y - a.y);
+      const ap = v(p.x - a.x, p.y - a.y);
+      const ab2 = dot(ab, ab);
+      const t = Math.max(0, Math.min(1, dot(ap, ab) / (ab2 || 1)));
+      const closest = v(a.x + ab.x * t, a.y + ab.y * t);
+      return {
+        dist: Math.hypot(p.x - closest.x, p.y - closest.y),
+        closest,
+      };
+    }
+
+    function addSpark(x, y, color, count = 14) {
+      for (let i = 0; i < count; i++) {
+        state.sparks.push({
+          x,
+          y,
+          vx: rand(-120, 120),
+          vy: rand(-180, 0),
+          life: rand(0.4, 0.9),
+          ttl: rand(0.4, 0.9),
+          color,
+        });
+      }
+    }
+
+    function makeLauncher(container, x, y, baseAngleDeg) {
+      return {
+        container,
+        pos: v(x, y),
+        base: (baseAngleDeg * Math.PI) / 180,
+        range: (60 * Math.PI) / 180,
+        period: 3,
+        t: 0,
+        lastShot: -999,
+      };
+    }
+
+    function buildDynamicSquares({ y, count, startX, spacing, speed, size, spin }) {
+      return Array.from({ length: count }, (_, i) => ({
+        x: startX + i * spacing,
+        y,
+        size,
+        speed,
+        angle: i * 0.35,
+        spin: spin * (i % 2 === 0 ? 1 : -1),
+      }));
+    }
+
+    const container1 = {
+      id: 1,
+      x: 30,
+      y: 30,
+      w: 980,
+      h: 280,
+      launcher: makeLauncher(1, 76, 80, 18),
+      movingSquares: [
+        ...buildDynamicSquares({ y: 120, count: 14, startX: 180, spacing: 62, speed: 82, size: 16, spin: 1.8 }),
+        ...buildDynamicSquares({ y: 185, count: 12, startX: 140, spacing: 72, speed: 105, size: 14, spin: 2.2 }),
+      ],
+      targetsA: [
+        { label: "BUFF", x: 330, y: 245, r: 26, type: "BUFF", glow: 0 },
+        { label: "SPLIT", x: 540, y: 245, r: 26, type: "SPLIT", glow: 0 },
+        { label: "WEAPON", x: 750, y: 245, r: 26, type: "WEAPON", glow: 0 },
+      ],
+    };
+
+    const container2 = {
+      id: 2,
+      x: 30,
+      y: 345,
+      w: 980,
+      h: 275,
+      launcher: makeLauncher(2, 76, 392, -8),
+      movingSquares: [
+        ...buildDynamicSquares({ y: 438, count: 14, startX: 120, spacing: 65, speed: 96, size: 16, spin: 1.7 }),
+        ...buildDynamicSquares({ y: 505, count: 12, startX: 170, spacing: 70, speed: 118, size: 15, spin: 2.1 }),
+      ],
+      targetsB: [
+        { label: "UNIT-1", idx: 0, glow: 0 },
+        { label: "UNIT-2", idx: 1, glow: 0 },
+        { label: "UNIT-3", idx: 2, glow: 0 },
+        { label: "UNIT-4", idx: 3, glow: 0 },
+      ],
+    };
+
+    function createMarble(containerId, x, y, angle, speed = 265, hue = 130) {
+      state.marbles.push({
+        containerId,
+        x,
+        y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        r: marbleRadius,
+        hue,
+        life: 0,
+      });
+    }
+
+    function fire(launcher, spread = 0) {
+      const phase = (launcher.t % launcher.period) / launcher.period;
+      const sweep = Math.sin(phase * TAU) * launcher.range;
+      const a = launcher.base + sweep + spread;
+      createMarble(launcher.container, launcher.pos.x, launcher.pos.y, a, rand(390, 510), 125 + rand(-12, 8));
+      launcher.lastShot = launcher.t;
+      addSpark(launcher.pos.x, launcher.pos.y, "#8fffc1", 10);
+    }
+
+    function handleTargetA(marble, target) {
+      target.glow = 0.8;
+      if (target.type === "BUFF") {
+        state.buff += 1;
+        addSpark(target.x, target.y, "#ffd76a", 16);
+      } else if (target.type === "SPLIT") {
+        fire(container1.launcher, -0.22);
+        fire(container1.launcher, 0.22);
+        addSpark(target.x, target.y, "#79ffba", 20);
+      } else if (target.type === "WEAPON") {
+        fire(container2.launcher, rand(-0.08, 0.08));
+        addSpark(target.x, target.y, "#67f5ff", 24);
+      }
+      marble.dead = true;
+    }
+
+    function handleTargetB(marble, target) {
+      target.glow = 0.95;
+      state.units[target.idx] += 1;
+      addSpark(target.x, target.y, "#9eff87", 18);
+      marble.dead = true;
+    }
+
+    function processCollisions(marble, c) {
+      // wall collisions
+      const left = c.x + marble.r;
+      const right = c.x + c.w - marble.r;
+      const top = c.y + marble.r;
+      const bottom = c.y + c.h - marble.r;
+
+      if (marble.x < left) {
+        marble.x = left;
+        marble.vx *= -damping;
+      } else if (marble.x > right) {
+        marble.x = right;
+        marble.vx *= -damping;
+      }
+      if (marble.y < top) {
+        marble.y = top;
+        marble.vy *= -damping;
+      } else if (marble.y > bottom) {
+        marble.y = bottom;
+        marble.vy *= -damping;
+      }
+
+      // moving square obstacles
+      for (const o of c.movingSquares) {
+        const r = o.size * 0.75;
+        const dx = marble.x - o.x;
+        const dy = marble.y - o.y;
+        const d = Math.hypot(dx, dy);
+        const minD = marble.r + r;
+        if (d < minD) {
+          const n = normalize(v(dx, dy));
+          marble.x = o.x + n.x * minD;
+          marble.y = o.y + n.y * minD;
+          const bounced = reflect(v(marble.vx, marble.vy), n, 1.0);
+          marble.vx = bounced.x * 0.94;
+          marble.vy = bounced.y * 0.94;
+        }
+      }
+
+      // targets
+      if (c.id === 1) {
+        for (const t of c.targetsA) {
+          if (Math.hypot(marble.x - t.x, marble.y - t.y) < marble.r + t.r) {
+            handleTargetA(marble, t);
+            return;
+          }
+        }
+      } else {
+        const zoneW = c.w / c.targetsB.length;
+        const zoneH = 58;
+        const zoneY = c.y + c.h - zoneH;
+        for (const [i, t] of c.targetsB.entries()) {
+          const zoneX = c.x + i * zoneW;
+          const inZone = marble.x > zoneX && marble.x < zoneX + zoneW && marble.y > zoneY;
+          if (inZone) {
+            handleTargetB(marble, t);
+            return;
+          }
+        }
+      }
+    }
+
+    function update(dt) {
+      state.elapsed += dt;
+      const launchers = [container1.launcher, container2.launcher];
+
+      for (const l of launchers) {
+        l.t += dt;
+        if (l.t - l.lastShot >= l.period) {
+          fire(l);
+        }
+      }
+      for (const c of [container1, container2]) {
+        for (const o of c.movingSquares) {
+          o.x += o.speed * dt;
+          o.angle += o.spin * dt;
+          if (o.x > c.x + c.w + 30) o.x = c.x - 30;
+        }
+      }
+
+      for (const marble of state.marbles) {
+        marble.life += dt;
+        marble.vy += gravity * dt;
+        marble.x += marble.vx * dt;
+        marble.y += marble.vy * dt;
+        marble.vx *= 0.999;
+        marble.vy *= 0.999;
+
+        const c = marble.containerId === 1 ? container1 : container2;
+        processCollisions(marble, c);
+
+        if (marble.life > 16) marble.dead = true;
+      }
+      state.marbles = state.marbles.filter((m) => !m.dead);
+
+      for (const s of state.sparks) {
+        s.life -= dt;
+        s.x += s.vx * dt;
+        s.y += s.vy * dt;
+        s.vy += 450 * dt;
+      }
+      state.sparks = state.sparks.filter((s) => s.life > 0);
+
+      for (const t of container1.targetsA) t.glow = Math.max(0, t.glow - dt * 1.2);
+      for (const t of container2.targetsB) t.glow = Math.max(0, t.glow - dt * 1.5);
+    }
+
+    function drawContainer(c, title) {
+      ctx.save();
+      ctx.translate(c.x, c.y);
+
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = "#3edc85";
+      ctx.fillStyle = "rgba(7, 18, 11, 0.45)";
+      ctx.fillRect(0, 0, c.w, c.h);
+      ctx.strokeRect(0, 0, c.w, c.h);
+
+      const grad = ctx.createLinearGradient(0, 0, c.w, 0);
+      grad.addColorStop(0, "rgba(56,255,136,0.30)");
+      grad.addColorStop(0.5, "rgba(56,255,136,0)");
+      grad.addColorStop(1, "rgba(56,255,136,0.20)");
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, c.h - 16, c.w, 16);
+
+      ctx.font = "bold 24px Segoe UI";
+      ctx.fillStyle = "#6bff9b";
+      ctx.fillText(title, 16, 34);
+
+      ctx.restore();
+
+      for (const o of c.movingSquares) {
+        ctx.save();
+        ctx.translate(o.x, o.y);
+        ctx.rotate(o.angle);
+        ctx.fillStyle = "rgba(219, 229, 223, 0.92)";
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 1.5;
+        ctx.fillRect(-o.size / 2, -o.size / 2, o.size, o.size);
+        ctx.strokeRect(-o.size / 2, -o.size / 2, o.size, o.size);
+        ctx.restore();
+      }
+    }
+
+    function drawLauncher(launcher) {
+      const phase = (launcher.t % launcher.period) / launcher.period;
+      const angle = launcher.base + Math.sin(phase * TAU) * launcher.range;
+      const len = 55;
+
+      ctx.strokeStyle = "#61ff9f";
+      ctx.lineWidth = 8;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(launcher.pos.x, launcher.pos.y);
+      ctx.lineTo(launcher.pos.x + Math.cos(angle) * len, launcher.pos.y + Math.sin(angle) * len);
+      ctx.stroke();
+
+      ctx.fillStyle = "#3cff84";
+      ctx.beginPath();
+      ctx.arc(launcher.pos.x, launcher.pos.y, 10, 0, TAU);
+      ctx.fill();
+    }
+
+    function drawTargets() {
+      for (const t of container1.targetsA) {
+        const alpha = 0.2 + t.glow * 0.8;
+        ctx.fillStyle = `rgba(66,255,140,${alpha})`;
+        ctx.beginPath();
+        ctx.arc(t.x, t.y, t.r, 0, TAU);
+        ctx.fill();
+        ctx.strokeStyle = "#7bffb1";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        ctx.fillStyle = "#c7ffd6";
+        ctx.font = "bold 17px Segoe UI";
+        const w = ctx.measureText(t.label).width;
+        ctx.fillText(t.label, t.x - w / 2, t.y + 5);
+      }
+
+      for (const t of container2.targetsB) {
+        const i = t.idx;
+        const zoneW = container2.w / container2.targetsB.length;
+        const zoneH = 58;
+        const x = container2.x + i * zoneW;
+        const y = container2.y + container2.h - zoneH;
+        const alpha = 0.18 + t.glow * 0.75;
+        ctx.fillStyle = `rgba(94,238,125,${alpha})`;
+        ctx.fillRect(x, y, zoneW, zoneH);
+        ctx.strokeStyle = "#a7ffc2";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x, y, zoneW, zoneH);
+
+        ctx.fillStyle = "#dcffe7";
+        ctx.font = "bold 16px Segoe UI";
+        const w = ctx.measureText(t.label).width;
+        ctx.fillText(t.label, x + zoneW / 2 - w / 2, y + 34);
+      }
+    }
+
+    function drawMarbles() {
+      for (const m of state.marbles) {
+        const speed = Math.hypot(m.vx, m.vy);
+        const trail = normalize(v(m.vx, m.vy));
+        const trailLen = Math.min(40, speed * 0.05);
+        const tx = m.x - trail.x * trailLen;
+        const ty = m.y - trail.y * trailLen;
+        const tg = ctx.createLinearGradient(m.x, m.y, tx, ty);
+        tg.addColorStop(0, "rgba(124,255,176,0.72)");
+        tg.addColorStop(1, "rgba(124,255,176,0)");
+        ctx.strokeStyle = tg;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(m.x, m.y);
+        ctx.lineTo(tx, ty);
+        ctx.stroke();
+
+        const g = ctx.createRadialGradient(m.x - 2, m.y - 2, 1, m.x, m.y, m.r * 1.8);
+        g.addColorStop(0, "#d8ffe6");
+        g.addColorStop(0.3, `hsl(${m.hue} 98% 72%)`);
+        g.addColorStop(1, `hsl(${m.hue} 90% 35%)`);
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(m.x, m.y, m.r, 0, TAU);
+        ctx.fill();
+      }
+    }
+
+    function drawSparks() {
+      for (const s of state.sparks) {
+        const a = Math.max(0, s.life / s.ttl);
+        ctx.fillStyle = s.color.replace(")", `, ${a})`).replace("rgb", "rgba");
+        if (!ctx.fillStyle.startsWith("rgba")) {
+          ctx.fillStyle = `rgba(114,255,154,${a})`;
+        }
+        ctx.fillRect(s.x, s.y, 2.6, 2.6);
+      }
+    }
+
+    function drawHUD() {
+      ctx.fillStyle = "#b3ffcc";
+      ctx.font = "bold 21px Segoe UI";
+      ctx.fillText(`BUFF: ${state.buff}`, 860, 64);
+
+      const labels = ["单位1", "单位2", "单位3", "单位4"];
+      for (let i = 0; i < 4; i++) {
+        const x = 220 + i * 180;
+        const y = 628;
+        ctx.fillStyle = "#9bffbd";
+        ctx.font = "bold 18px Segoe UI";
+        ctx.fillText(`${labels[i]}: ${state.units[i]}`, x, y);
+      }
+
+      ctx.font = "14px Segoe UI";
+      ctx.fillStyle = "#8ef4b2";
+      ctx.fillText("规则: 发射器每3秒发射1枚弹珠；命中BUFF/SPLIT/WEAPON触发逻辑；WEAPON会进入第二容器并产出单位", 55, 20);
+    }
+
+    let last = performance.now();
+    function loop(now) {
+      const dt = Math.min((now - last) / 1000, 0.033);
+      last = now;
+
+      update(dt);
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drawContainer(container1, "容器1：弹珠发射控制");
+      drawContainer(container2, "容器2：单位生产");
+      drawLauncher(container1.launcher);
+      drawLauncher(container2.launcher);
+      drawTargets();
+      drawMarbles();
+      drawSparks();
+      drawHUD();
+
+      requestAnimationFrame(loop);
+    }
+
+    // 初始开火，防止开场空窗
+    fire(container1.launcher);
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
